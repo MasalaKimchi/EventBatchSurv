@@ -26,7 +26,15 @@ class DatasetConfig:
 class TrainConfig:
     batch_sizes: list[int] = field(default_factory=lambda: [4, 8, 16, 32])
     batching_policies: list[str] = field(
-        default_factory=lambda: ["random", "event_aware_min1", "event_aware_min2_feasible"]
+        default_factory=lambda: [
+            "random",
+            "event_quota_wor_25",
+            "event_quota_wor_50",
+            "event_quota_wor_75",
+            "event_quota_wr_25",
+            "event_quota_wr_50",
+            "event_quota_wr_75",
+        ]
     )
     seeds: list[int] = field(default_factory=lambda: list(range(10)))
     epochs: int = 40
@@ -42,11 +50,11 @@ class TrainConfig:
     save_epoch_logs: bool = False
     save_run_meta: bool = False
     save_run_summary: bool = True
-    save_best_model: bool = True
 
 
 @dataclass
 class ModelConfig:
+    backbone: str = "cox_mlp"
     hidden_dims: list[int] = field(default_factory=lambda: [256, 128])
     dropout: float = 0.2
 

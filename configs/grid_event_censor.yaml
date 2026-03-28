@@ -6,5 +6,5 @@ dataset:
 
 train:
   batch_sizes: [4, 8, 16, 32]
-  batching_policies: [random, event_aware_min1, event_aware_min2_feasible]
+  batching_policies: [random, event_quota_wor_25, event_quota_wor_50, event_quota_wor_75, event_quota_wr_25, event_quota_wr_50, event_quota_wr_75]
   seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,7 @@ from ebs.config import ExperimentConfig
 from ebs.data import generate_synthetic_survival_from_mnist, get_or_create_fixed_splits
 from ebs.engine import RunContext, run_training
 from ebs.io import ensure_dir, write_csv, write_json
+from ebs.policies import normalize_batching_policy
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,8 +45,14 @@ def main() -> None:
     args = parse_args()
     cfg = load_merged_config(args.base_config, args.grid_config)
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_prefix = Path(args.grid_config).stem
+    compact_run_dir = ensure_dir(Path(cfg.output.results_dir) / f"{run_prefix}_{timestamp}")
     runs_root = ensure_dir(Path(cfg.output.results_dir) / cfg.output.run_dirname)
     aggregates_root = ensure_dir(Path(cfg.output.results_dir) / cfg.output.aggregate_dirname)
+
+    # Compact run layout: we only keep consolidated summaries in one timestamped folder.
+    cfg.train.save_run_summary = False
 
     if args.smoke:
         cfg.dataset.event_prevalence_targets = cfg.dataset.event_prevalence_targets[:1]
@@ -96,7 +104,8 @@ def main() -> None:
                 write_json(dataset_meta_file, dataset_meta)
 
                 for batch_size in cfg.train.batch_sizes:
-                    for policy in cfg.train.batching_policies:
+                    for raw_policy in cfg.train.batching_policies:
+                        policy = normalize_batching_policy(raw_policy)
                         run_name = (
                             f"evt_{event_target:.2f}__cen_{censor_target:.2f}"
                             f"__b_{batch_size}__policy_{policy}__seed_{seed}"
@@ -117,14 +126,32 @@ def main() -> None:
                             event_obs=surv.event,
                             train_idx=split.train_idx,
                             val_idx=split.val_idx,
+                            test_idx=split.test_idx,
                         )
                         summary["run_name"] = run_name
+                        summary["compact_run_id"] = f"{run_prefix}_{timestamp}"
                         summary["realized_dataset_event_rate"] = surv.realized_event_rate
                         summary["realized_censoring_susceptible"] = surv.realized_censoring_susceptible
                         run_rows.append(summary)
                         print(json.dumps({"status": "completed_run", "run_name": run_name}))
 
     run_df = pd.DataFrame(run_rows)
+    # Write concise, one-file-per-format summaries for this run only.
+    write_csv(compact_run_dir / "run_summaries.csv", run_rows)
+    run_df.to_json(compact_run_dir / "run_summaries.json", orient="records", indent=2)
+    _write_seed_aggregates(run_df, compact_run_dir / "seed_aggregates.csv")
+    write_json(
+        compact_run_dir / "manifest.json",
+        {
+            "run_id": f"{run_prefix}_{timestamp}",
+            "created_at": timestamp,
+            "grid_config": args.grid_config,
+            "base_config": args.base_config,
+            "n_runs": int(len(run_rows)),
+        },
+    )
+
+    # Keep legacy aggregate outputs for downstream scripts.
     write_csv(aggregates_root / "run_summaries.csv", run_rows)
     run_df.to_json(aggregates_root / "run_summaries.json", orient="records", indent=2)
     _write_seed_aggregates(run_df, aggregates_root / "seed_aggregates.csv")
