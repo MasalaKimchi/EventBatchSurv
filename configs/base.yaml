@@ -1,0 +1,38 @@
+name: small_batch_cox
+
+dataset:
+  mnist_root: data/mnist
+  n_samples: 12000
+  event_prevalence_targets: [0.05, 0.10, 0.20, 0.40, 1.00]
+  censoring_targets: [0.00, 0.25, 0.50, 0.75]
+  train_fraction: 0.70
+  val_fraction: 0.15
+  split_seed: 123
+  generator_seed_offset: 10000
+  cache_dir: results/cache
+
+train:
+  batch_sizes: [4, 8, 16, 32]
+  batching_policies: [random, event_aware_min1, event_aware_min2_feasible]
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  epochs: 40
+  lr: 0.001
+  weight_decay: 0.0001
+  optimizer: adamw
+  scheduler: cosine
+  min_lr: 0.00001
+  grad_clip_norm: 10.0
+  device: cpu
+  log_every_batches: 50
+
+model:
+  hidden_dims: [256, 128]
+  dropout: 0.2
+
+output:
+  results_dir: results
+  run_dirname: runs
+  aggregate_dirname: aggregates
+  figure_dirname: figures
+  table_dirname: tables
+  interpretation_filename: interpretation.md

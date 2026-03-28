@@ -1,0 +1,2 @@
+"""EventBatchSurv package."""
+

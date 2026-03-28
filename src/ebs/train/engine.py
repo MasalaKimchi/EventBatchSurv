@@ -1,0 +1,277 @@
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import torch
+from torch.utils.data import DataLoader, Subset
+
+from ebs.config.schema import ExperimentConfig
+from ebs.data.mnist_survival import SurvivalTensorDataset
+from ebs.diagnostics.batch_diagnostics import (
+    comparable_pairs_count,
+    grad_norm,
+    summarize_epoch_batch_diagnostics,
+)
+from ebs.metrics.survival_metrics import (
+    brier_at_median_time,
+    cox_partial_log_likelihood_loss,
+    harrell_c_index,
+    uno_c_index_if_available,
+)
+from ebs.models.cox_mlp import CoxMLP
+from ebs.samplers.event_aware import EventAwareBatchSampler
+from ebs.samplers.random_batching import RandomBatchSampler
+from ebs.utils.io import append_jsonl, ensure_dir, write_json
+
+
+@dataclass
+class RunContext:
+    event_target: float
+    censor_target: float
+    batch_size: int
+    batching_policy: str
+    seed: int
+    output_dir: Path
+
+
+def run_training(
+    *,
+    cfg: ExperimentConfig,
+    context: RunContext,
+    x: np.ndarray,
+    time_obs: np.ndarray,
+    event_obs: np.ndarray,
+    train_idx: np.ndarray,
+    val_idx: np.ndarray,
+) -> dict[str, float | int | str]:
+    torch.manual_seed(context.seed)
+    np.random.seed(context.seed)
+
+    dataset = SurvivalTensorDataset(x=x, time=time_obs, event=event_obs)
+    train_subset = Subset(dataset, indices=train_idx.tolist())
+    val_subset = Subset(dataset, indices=val_idx.tolist())
+    train_events = event_obs[train_idx]
+    sampler = _build_train_sampler(
+        policy=context.batching_policy,
+        indices=np.array(train_idx, dtype=np.int64),
+        events=np.array(event_obs, dtype=np.int64),
+        batch_size=context.batch_size,
+        seed=context.seed,
+    )
+    train_loader = DataLoader(train_subset, batch_sampler=sampler)
+    val_loader = DataLoader(val_subset, batch_size=1024, shuffle=False)
+
+    device = torch.device(cfg.train.device)
+    model = CoxMLP(
+        input_dim=int(np.prod(x.shape[1:])),
+        hidden_dims=cfg.model.hidden_dims,
+        dropout=cfg.model.dropout,
+    ).to(device)
+    optimizer = _build_optimizer(cfg=cfg, model=model)
+    scheduler = _build_scheduler(cfg=cfg, optimizer=optimizer)
+
+    run_dir = ensure_dir(context.output_dir)
+    epoch_log_path = run_dir / "epoch_logs.jsonl"
+    batch_log_path = run_dir / "batch_logs.jsonl"
+
+    best_val = -np.inf
+    best_epoch = -1
+    best_time_s = np.nan
+    started = time.perf_counter()
+    per_epoch_rows: list[dict[str, float | int | str]] = []
+
+    for epoch in range(cfg.train.epochs):
+        model.train()
+        batch_losses: list[float] = []
+        event_counts: list[int] = []
+        one_batch_comparable_pairs: list[int] = []
+        grad_norms: list[float] = []
+        epoch_start = time.perf_counter()
+        for batch_idx, (bx, bt, be) in enumerate(train_loader):
+            bx = bx.to(device).view(bx.shape[0], -1)
+            bt = bt.to(device)
+            be = be.to(device)
+            optimizer.zero_grad(set_to_none=True)
+            risk = model(bx)
+            loss = cox_partial_log_likelihood_loss(risk, bt, be)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.train.grad_clip_norm)
+            gnorm = grad_norm(model)
+            optimizer.step()
+            batch_losses.append(float(loss.item()))
+            ecount = int(be.sum().item())
+            event_counts.append(ecount)
+            pairs = comparable_pairs_count(bt, be)
+            one_batch_comparable_pairs.append(pairs)
+            grad_norms.append(gnorm)
+
+            append_jsonl(
+                batch_log_path,
+                {
+                    "epoch": epoch,
+                    "batch_index": batch_idx,
+                    "batch_size": int(bx.shape[0]),
+                    "event_count": ecount,
+                    "one_event": int(ecount == 1),
+                    "zero_event": int(ecount == 0),
+                    "comparable_pairs": pairs,
+                    "grad_norm": gnorm,
+                },
+            )
+
+        scheduler.step()
+        val_metrics = evaluate(model=model, loader=val_loader, device=device)
+        summary = summarize_epoch_batch_diagnostics(
+            event_counts=event_counts, comparable_pairs=one_batch_comparable_pairs, grad_norms=grad_norms
+        )
+        elapsed_epoch = time.perf_counter() - epoch_start
+        row = {
+            "epoch": epoch,
+            "train_loss": float(np.mean(batch_losses)) if batch_losses else float("nan"),
+            "val_loss": float(val_metrics["cox_loss"]),
+            "val_c_index": float(val_metrics["c_index"]),
+            "val_uno_c_index": float(val_metrics["uno_c_index"]),
+            "val_brier_proxy": float(val_metrics["brier_proxy"]),
+            "zero_event_fraction": summary.zero_event_fraction,
+            "one_event_fraction": summary.one_event_fraction,
+            "mean_events_per_batch": summary.mean_events_per_batch,
+            "mean_comparable_pairs": summary.mean_comparable_pairs,
+            "grad_norm_mean": summary.grad_norm_mean,
+            "grad_norm_var": summary.grad_norm_var,
+            "grad_norm_cv": summary.grad_norm_cv,
+            "epoch_time_s": elapsed_epoch,
+        }
+        per_epoch_rows.append(row)
+        append_jsonl(epoch_log_path, row)
+
+        current_val = float(val_metrics["c_index"])
+        if np.isfinite(current_val) and current_val > best_val:
+            best_val = current_val
+            best_epoch = epoch
+            best_time_s = time.perf_counter() - started
+            torch.save(model.state_dict(), run_dir / "best_model.pt")
+
+    total_time_s = time.perf_counter() - started
+    write_json(run_dir / "run_meta.json", _run_meta_dict(context, train_events, sampler))
+    return {
+        "event_target": context.event_target,
+        "censor_target": context.censor_target,
+        "batch_size": context.batch_size,
+        "batching_policy": context.batching_policy,
+        "seed": context.seed,
+        "best_epoch": best_epoch,
+        "best_val_c_index": float(best_val),
+        "best_time_s": float(best_time_s),
+        "total_time_s": float(total_time_s),
+        "final_train_loss": float(per_epoch_rows[-1]["train_loss"]),
+        "final_val_loss": float(per_epoch_rows[-1]["val_loss"]),
+        "final_val_uno_c_index": float(per_epoch_rows[-1]["val_uno_c_index"]),
+        "final_val_brier_proxy": float(per_epoch_rows[-1]["val_brier_proxy"]),
+        "final_zero_event_fraction": float(per_epoch_rows[-1]["zero_event_fraction"]),
+        "final_one_event_fraction": float(per_epoch_rows[-1]["one_event_fraction"]),
+        "final_grad_norm_var": float(per_epoch_rows[-1]["grad_norm_var"]),
+    }
+
+
+def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> dict[str, float]:
+    model.eval()
+    all_time: list[np.ndarray] = []
+    all_event: list[np.ndarray] = []
+    all_risk: list[np.ndarray] = []
+    with torch.no_grad():
+        for bx, bt, be in loader:
+            bx = bx.to(device).view(bx.shape[0], -1)
+            risk = model(bx).cpu().numpy()
+            all_risk.append(risk)
+            all_time.append(bt.numpy())
+            all_event.append(be.numpy())
+    time_arr = np.concatenate(all_time).astype(np.float64)
+    event_arr = np.concatenate(all_event).astype(np.int64)
+    risk_arr = np.concatenate(all_risk).astype(np.float64)
+
+    t = torch.from_numpy(time_arr.astype(np.float32))
+    e = torch.from_numpy(event_arr.astype(np.int64))
+    r = torch.from_numpy(risk_arr.astype(np.float32))
+    cox_loss = float(cox_partial_log_likelihood_loss(r, t, e).item())
+    return {
+        "cox_loss": cox_loss,
+        "c_index": harrell_c_index(time_arr, event_arr, risk_arr),
+        "uno_c_index": uno_c_index_if_available(time_arr, event_arr, risk_arr),
+        "brier_proxy": brier_at_median_time(time_arr, event_arr, risk_arr),
+    }
+
+
+def _build_train_sampler(
+    *,
+    policy: str,
+    indices: np.ndarray,
+    events: np.ndarray,
+    batch_size: int,
+    seed: int,
+) -> torch.utils.data.Sampler[list[int]]:
+    if policy == "random":
+        return RandomBatchSampler(indices=indices, batch_size=batch_size, seed=seed)
+    if policy == "event_aware_min1":
+        return EventAwareBatchSampler(
+            indices=indices,
+            events=events,
+            batch_size=batch_size,
+            min_events_per_batch=1,
+            seed=seed,
+            strict_feasible=False,
+        )
+    if policy == "event_aware_min2_feasible":
+        return EventAwareBatchSampler(
+            indices=indices,
+            events=events,
+            batch_size=batch_size,
+            min_events_per_batch=2,
+            seed=seed,
+            strict_feasible=True,
+        )
+    raise ValueError(f"Unknown batching policy: {policy}")
+
+
+def _build_optimizer(cfg: ExperimentConfig, model: torch.nn.Module) -> torch.optim.Optimizer:
+    if cfg.train.optimizer.lower() == "adamw":
+        return torch.optim.AdamW(model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
+    if cfg.train.optimizer.lower() == "adam":
+        return torch.optim.Adam(model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
+    raise ValueError(f"Unsupported optimizer: {cfg.train.optimizer}")
+
+
+def _build_scheduler(
+    cfg: ExperimentConfig, optimizer: torch.optim.Optimizer
+) -> torch.optim.lr_scheduler._LRScheduler:
+    if cfg.train.scheduler.lower() == "cosine":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(cfg.train.epochs, 1), eta_min=cfg.train.min_lr
+        )
+    if cfg.train.scheduler.lower() == "none":
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
+    raise ValueError(f"Unsupported scheduler: {cfg.train.scheduler}")
+
+
+def _run_meta_dict(
+    context: RunContext,
+    train_events: np.ndarray,
+    sampler: torch.utils.data.Sampler[list[int]],
+) -> dict[str, float | int | bool | str]:
+    train_event_rate = float(np.mean(train_events))
+    return {
+        "event_target": context.event_target,
+        "censor_target": context.censor_target,
+        "batch_size": context.batch_size,
+        "batching_policy": context.batching_policy,
+        "seed": context.seed,
+        "train_event_rate": train_event_rate,
+        "theoretical_zero_event_prob": float((1.0 - train_event_rate) ** context.batch_size),
+        "theoretical_weak_info_prob": float(
+            (1.0 - train_event_rate) ** context.batch_size
+            + context.batch_size * train_event_rate * ((1.0 - train_event_rate) ** (context.batch_size - 1))
+        ),
+        "sampler_feasible": bool(getattr(sampler, "feasible", True)),
+    }
