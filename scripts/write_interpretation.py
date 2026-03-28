@@ -12,7 +12,7 @@ import sys
 
 sys.path.insert(0, str(ROOT / "src"))
 
-from ebs.utils.io import ensure_dir
+from ebs.io import ensure_dir
 
 
 def parse_args() -> argparse.Namespace:

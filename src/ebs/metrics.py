@@ -5,6 +5,7 @@ import torch
 from torchsurv.loss.cox import neg_partial_log_likelihood
 from torchsurv.metrics.brier_score import BrierScore
 from torchsurv.metrics.cindex import ConcordanceIndex
+from torchsurv.stats.ipcw import get_ipcw
 
 
 def cox_partial_log_likelihood_loss(
@@ -34,16 +35,21 @@ def harrell_c_index(time: np.ndarray, event: np.ndarray, risk: np.ndarray) -> fl
         return float("nan")
 
 
-def uno_c_index_if_available(time: np.ndarray, event: np.ndarray, risk: np.ndarray) -> float:
+def ipcw_c_index(time: np.ndarray, event: np.ndarray, risk: np.ndarray) -> float:
     try:
-        from sksurv.metrics import concordance_index_ipcw
-        from sksurv.util import Surv
-    except Exception:
-        return float("nan")
-    y = Surv.from_arrays(event.astype(bool), time.astype(float))
-    try:
-        value = concordance_index_ipcw(y, y, risk.astype(float))[0]
-        return float(value)
+        time_t = torch.as_tensor(time, dtype=torch.float32)
+        event_t = torch.as_tensor(event, dtype=torch.bool)
+        risk_t = torch.as_tensor(risk, dtype=torch.float32)
+        weight = get_ipcw(event=event_t, time=time_t, checks=True)
+        metric = ConcordanceIndex()
+        value = metric(
+            estimate=risk_t,
+            event=event_t,
+            time=time_t,
+            weight=weight,
+            instate=False,
+        )
+        return float(value.item())
     except Exception:
         return float("nan")
 
@@ -57,8 +63,6 @@ def brier_at_median_time(time: np.ndarray, event: np.ndarray, risk: np.ndarray) 
     risk_t = torch.as_tensor(risk, dtype=torch.float32)
     event_t = torch.as_tensor(event, dtype=torch.bool)
 
-    # Convert Cox risk score to survival probabilities with an exponential PH approximation.
-    # This is only used to feed a calibration-sensitive metric.
     mean_rate = torch.reciprocal(time_t.clamp_min(1e-6)).mean()
     rate = torch.exp(risk_t - risk_t.mean()) * mean_rate
     new_time = torch.as_tensor([tau], dtype=torch.float32)

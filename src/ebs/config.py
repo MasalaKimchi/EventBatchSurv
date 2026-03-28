@@ -38,6 +38,11 @@ class TrainConfig:
     grad_clip_norm: float = 10.0
     device: str = "cpu"
     log_every_batches: int = 50
+    save_batch_logs: bool = False
+    save_epoch_logs: bool = False
+    save_run_meta: bool = False
+    save_run_summary: bool = True
+    save_best_model: bool = True
 
 
 @dataclass

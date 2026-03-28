@@ -1,0 +1,30 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# Conda and local env metadata
+.conda/
+.python-version
+
+# Experiment outputs
+results/runs/
+results/aggregates/
+results/figures/
+results/tables/
+results/cache/
+results/**/*.jsonl
+results/**/*.csv
+results/**/*.json
+results/**/*.png
+results/**/*.pt
+results/interpretation.md
+
+# Local datasets
+data/MNIST/
+
+# OS/editor noise
+.DS_Store

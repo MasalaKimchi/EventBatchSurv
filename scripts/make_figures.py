@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, str(ROOT / "src"))
 
-from ebs.utils.io import ensure_dir
+from ebs.io import ensure_dir
 
 sns.set_theme(style="whitegrid", context="talk")
 

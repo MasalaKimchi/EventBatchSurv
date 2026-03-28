@@ -1,2 +1,0 @@
-"""Training engine for EventBatchSurv."""
-

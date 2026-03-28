@@ -1,2 +1,2 @@
-"""EventBatchSurv package."""
+"""EventBatchSurv package with flattened module layout."""
 

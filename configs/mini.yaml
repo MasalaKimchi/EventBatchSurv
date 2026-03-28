@@ -1,0 +1,12 @@
+name: small_batch_cox_mini
+
+dataset:
+  n_samples: 2000
+  event_prevalence_targets: [0.05, 0.25, 0.50]
+  censoring_targets: [0.05, 0.25, 0.75]
+
+train:
+  batch_sizes: [8]
+  batching_policies: [random]
+  seeds: [0]
+  epochs: 1

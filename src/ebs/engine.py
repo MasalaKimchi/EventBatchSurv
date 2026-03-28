@@ -8,23 +8,13 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from ebs.config.schema import ExperimentConfig
-from ebs.data.mnist_survival import SurvivalTensorDataset
-from ebs.diagnostics.batch_diagnostics import (
-    comparable_pairs_count,
-    grad_norm,
-    summarize_epoch_batch_diagnostics,
-)
-from ebs.metrics.survival_metrics import (
-    brier_at_median_time,
-    cox_partial_log_likelihood_loss,
-    harrell_c_index,
-    uno_c_index_if_available,
-)
-from ebs.models.cox_mlp import CoxMLP
-from ebs.samplers.event_aware import EventAwareBatchSampler
-from ebs.samplers.random_batching import RandomBatchSampler
-from ebs.utils.io import append_jsonl, ensure_dir, write_json
+from ebs.config import ExperimentConfig
+from ebs.data import SurvivalTensorDataset
+from ebs.diagnostics import comparable_pairs_count, grad_norm, summarize_epoch_batch_diagnostics
+from ebs.io import append_jsonl, ensure_dir, write_json
+from ebs.metrics import brier_at_median_time, cox_partial_log_likelihood_loss, harrell_c_index, ipcw_c_index
+from ebs.model import CoxMLP
+from ebs.samplers import EventAwareBatchSampler, RandomBatchSampler
 
 
 @dataclass
@@ -46,7 +36,7 @@ def run_training(
     event_obs: np.ndarray,
     train_idx: np.ndarray,
     val_idx: np.ndarray,
-) -> dict[str, float | int | str]:
+) -> dict[str, float | int | bool | str]:
     torch.manual_seed(context.seed)
     np.random.seed(context.seed)
 
@@ -54,10 +44,12 @@ def run_training(
     train_subset = Subset(dataset, indices=train_idx.tolist())
     val_subset = Subset(dataset, indices=val_idx.tolist())
     train_events = event_obs[train_idx]
+    # Batch samplers for a Subset must emit local positions [0..len(train_subset)-1].
+    train_local_idx = np.arange(train_idx.shape[0], dtype=np.int64)
     sampler = _build_train_sampler(
         policy=context.batching_policy,
-        indices=np.array(train_idx, dtype=np.int64),
-        events=np.array(event_obs, dtype=np.int64),
+        indices=train_local_idx,
+        events=np.array(train_events, dtype=np.int64),
         batch_size=context.batch_size,
         seed=context.seed,
     )
@@ -76,14 +68,32 @@ def run_training(
     run_dir = ensure_dir(context.output_dir)
     epoch_log_path = run_dir / "epoch_logs.jsonl"
     batch_log_path = run_dir / "batch_logs.jsonl"
+    run_meta_path = run_dir / "run_meta.json"
+    run_summary_path = run_dir / "run_summary.json"
+    best_model_path = run_dir / "best_model.pt"
+
+    if not cfg.train.save_epoch_logs and epoch_log_path.exists():
+        epoch_log_path.unlink()
+    if not cfg.train.save_batch_logs and batch_log_path.exists():
+        batch_log_path.unlink()
+    if not cfg.train.save_run_meta and run_meta_path.exists():
+        run_meta_path.unlink()
+    if not cfg.train.save_best_model and best_model_path.exists():
+        best_model_path.unlink()
 
     best_val = -np.inf
     best_epoch = -1
     best_time_s = np.nan
     started = time.perf_counter()
     per_epoch_rows: list[dict[str, float | int | str]] = []
+    total_batches = 0
+    zero_event_batches = 0
+    weak_info_batches = 0
+    run_meta = _run_meta_dict(context, train_events, sampler)
 
     for epoch in range(cfg.train.epochs):
+        if hasattr(sampler, "set_epoch"):
+            sampler.set_epoch(epoch)
         model.train()
         batch_losses: list[float] = []
         event_counts: list[int] = []
@@ -107,20 +117,24 @@ def run_training(
             pairs = comparable_pairs_count(bt, be)
             one_batch_comparable_pairs.append(pairs)
             grad_norms.append(gnorm)
+            total_batches += 1
+            zero_event_batches += int(ecount == 0)
+            weak_info_batches += int(ecount <= 1)
 
-            append_jsonl(
-                batch_log_path,
-                {
-                    "epoch": epoch,
-                    "batch_index": batch_idx,
-                    "batch_size": int(bx.shape[0]),
-                    "event_count": ecount,
-                    "one_event": int(ecount == 1),
-                    "zero_event": int(ecount == 0),
-                    "comparable_pairs": pairs,
-                    "grad_norm": gnorm,
-                },
-            )
+            if cfg.train.save_batch_logs:
+                append_jsonl(
+                    batch_log_path,
+                    {
+                        "epoch": epoch,
+                        "batch_index": batch_idx,
+                        "batch_size": int(bx.shape[0]),
+                        "event_count": ecount,
+                        "one_event": int(ecount == 1),
+                        "zero_event": int(ecount == 0),
+                        "comparable_pairs": pairs,
+                        "grad_norm": gnorm,
+                    },
+                )
 
         scheduler.step()
         val_metrics = evaluate(model=model, loader=val_loader, device=device)
@@ -133,7 +147,7 @@ def run_training(
             "train_loss": float(np.mean(batch_losses)) if batch_losses else float("nan"),
             "val_loss": float(val_metrics["cox_loss"]),
             "val_c_index": float(val_metrics["c_index"]),
-            "val_uno_c_index": float(val_metrics["uno_c_index"]),
+            "val_ipcw_c_index": float(val_metrics["ipcw_c_index"]),
             "val_brier_proxy": float(val_metrics["brier_proxy"]),
             "zero_event_fraction": summary.zero_event_fraction,
             "one_event_fraction": summary.one_event_fraction,
@@ -145,18 +159,23 @@ def run_training(
             "epoch_time_s": elapsed_epoch,
         }
         per_epoch_rows.append(row)
-        append_jsonl(epoch_log_path, row)
+        if cfg.train.save_epoch_logs:
+            append_jsonl(epoch_log_path, row)
 
         current_val = float(val_metrics["c_index"])
         if np.isfinite(current_val) and current_val > best_val:
             best_val = current_val
             best_epoch = epoch
             best_time_s = time.perf_counter() - started
-            torch.save(model.state_dict(), run_dir / "best_model.pt")
+            if cfg.train.save_best_model:
+                torch.save(model.state_dict(), best_model_path)
 
     total_time_s = time.perf_counter() - started
-    write_json(run_dir / "run_meta.json", _run_meta_dict(context, train_events, sampler))
-    return {
+    if cfg.train.save_run_meta:
+        write_json(run_meta_path, run_meta)
+    empirical_zero = float(zero_event_batches / total_batches) if total_batches > 0 else float("nan")
+    empirical_weak = float(weak_info_batches / total_batches) if total_batches > 0 else float("nan")
+    result = {
         "event_target": context.event_target,
         "censor_target": context.censor_target,
         "batch_size": context.batch_size,
@@ -168,12 +187,21 @@ def run_training(
         "total_time_s": float(total_time_s),
         "final_train_loss": float(per_epoch_rows[-1]["train_loss"]),
         "final_val_loss": float(per_epoch_rows[-1]["val_loss"]),
-        "final_val_uno_c_index": float(per_epoch_rows[-1]["val_uno_c_index"]),
+        "final_val_ipcw_c_index": float(per_epoch_rows[-1]["val_ipcw_c_index"]),
         "final_val_brier_proxy": float(per_epoch_rows[-1]["val_brier_proxy"]),
         "final_zero_event_fraction": float(per_epoch_rows[-1]["zero_event_fraction"]),
         "final_one_event_fraction": float(per_epoch_rows[-1]["one_event_fraction"]),
         "final_grad_norm_var": float(per_epoch_rows[-1]["grad_norm_var"]),
+        "empirical_zero_event_prob": empirical_zero,
+        "empirical_weak_info_prob": empirical_weak,
+        "train_event_rate": float(run_meta["train_event_rate"]),
+        "theoretical_zero_event_prob": float(run_meta["theoretical_zero_event_prob"]),
+        "theoretical_weak_info_prob": float(run_meta["theoretical_weak_info_prob"]),
+        "sampler_feasible": bool(run_meta["sampler_feasible"]),
     }
+    if cfg.train.save_run_summary:
+        write_json(run_summary_path, result)
+    return result
 
 
 def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> dict[str, float]:
@@ -199,7 +227,7 @@ def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -
     return {
         "cox_loss": cox_loss,
         "c_index": harrell_c_index(time_arr, event_arr, risk_arr),
-        "uno_c_index": uno_c_index_if_available(time_arr, event_arr, risk_arr),
+        "ipcw_c_index": ipcw_c_index(time_arr, event_arr, risk_arr),
         "brier_proxy": brier_at_median_time(time_arr, event_arr, risk_arr),
     }
 

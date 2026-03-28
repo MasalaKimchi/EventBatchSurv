@@ -1,0 +1,4 @@
+# Keep folder structure in git, ignore generated artifacts.
+*
+!.gitignore
+!.gitkeep

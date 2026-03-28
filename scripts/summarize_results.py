@@ -13,8 +13,8 @@ import sys
 
 sys.path.insert(0, str(ROOT / "src"))
 
-from ebs.analysis.stat_tests import summarize_with_significance
-from ebs.utils.io import ensure_dir
+from ebs.analysis import summarize_with_significance
+from ebs.io import ensure_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,7 +26,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     results_dir = Path(args.results_dir)
-    runs_dir = results_dir / "runs"
     agg_dir = ensure_dir(results_dir / "aggregates")
     table_dir = ensure_dir(results_dir / "tables")
 
@@ -34,6 +33,43 @@ def main() -> None:
     if run_summaries.empty:
         raise RuntimeError("No run summaries found. Run scripts/run_grid.py first.")
 
+    merged = _attach_empirical_columns(run_summaries=run_summaries, results_dir=results_dir)
+    merged["bp"] = merged["batch_size"] * merged["train_event_rate"]
+    merged.to_csv(agg_dir / "run_summaries_enriched.csv", index=False)
+
+    summary, tests = summarize_with_significance(merged, metric="best_val_c_index")
+    summary.to_csv(agg_dir / "condition_summary.csv", index=False)
+    tests.to_csv(agg_dir / "paired_tests.csv", index=False)
+
+    _write_main_table(merged, table_dir / "table_main.csv")
+    _write_theory_table(merged, table_dir / "table_theory.csv")
+    print(f"Wrote aggregates to {agg_dir} and tables to {table_dir}")
+
+
+def _load_run_summaries(results_dir: Path) -> pd.DataFrame:
+    csv_path = results_dir / "aggregates" / "run_summaries.csv"
+    json_path = results_dir / "aggregates" / "run_summaries.json"
+    if csv_path.exists():
+        return pd.read_csv(csv_path)
+    if json_path.exists():
+        return pd.read_json(json_path)
+    return pd.DataFrame()
+
+
+def _attach_empirical_columns(run_summaries: pd.DataFrame, results_dir: Path) -> pd.DataFrame:
+    concise_cols = {
+        "empirical_zero_event_prob",
+        "empirical_weak_info_prob",
+        "theoretical_zero_event_prob",
+        "theoretical_weak_info_prob",
+        "train_event_rate",
+        "sampler_feasible",
+    }
+    if concise_cols.issubset(set(run_summaries.columns)):
+        return run_summaries.copy()
+
+    # Backward-compatibility fallback for legacy runs.
+    runs_dir = results_dir / "runs"
     empirical_rows = []
     for run_dir in sorted(runs_dir.glob("*")):
         batch_log = run_dir / "batch_logs.jsonl"
@@ -55,27 +91,7 @@ def main() -> None:
             }
         )
     empirical_df = pd.DataFrame(empirical_rows)
-    merged = run_summaries.merge(empirical_df, on="run_name", how="left")
-    merged["bp"] = merged["batch_size"] * merged["train_event_rate"]
-    merged.to_csv(agg_dir / "run_summaries_enriched.csv", index=False)
-
-    summary, tests = summarize_with_significance(merged, metric="best_val_c_index")
-    summary.to_csv(agg_dir / "condition_summary.csv", index=False)
-    tests.to_csv(agg_dir / "paired_tests.csv", index=False)
-
-    _write_main_table(merged, table_dir / "table_main.csv")
-    _write_theory_table(merged, table_dir / "table_theory.csv")
-    print(f"Wrote aggregates to {agg_dir} and tables to {table_dir}")
-
-
-def _load_run_summaries(results_dir: Path) -> pd.DataFrame:
-    csv_path = results_dir / "aggregates" / "run_summaries.csv"
-    json_path = results_dir / "aggregates" / "run_summaries.json"
-    if csv_path.exists():
-        return pd.read_csv(csv_path)
-    if json_path.exists():
-        return pd.read_json(json_path)
-    return pd.DataFrame()
+    return run_summaries.merge(empirical_df, on="run_name", how="left")
 
 
 def _write_main_table(df: pd.DataFrame, out_file: Path) -> None:

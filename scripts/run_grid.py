@@ -6,17 +6,17 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from ebs.config.schema import ExperimentConfig
-from ebs.data.mnist_survival import generate_synthetic_survival_from_mnist
-from ebs.data.splits import get_or_create_fixed_splits
-from ebs.train.engine import RunContext, run_training
-from ebs.utils.io import ensure_dir, write_csv, write_json
+from ebs.config import ExperimentConfig
+from ebs.data import generate_synthetic_survival_from_mnist, get_or_create_fixed_splits
+from ebs.engine import RunContext, run_training
+from ebs.io import ensure_dir, write_csv, write_json
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,6 +24,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--base-config", default="configs/base.yaml")
     p.add_argument("--grid-config", default="configs/grid_event_censor.yaml")
     p.add_argument("--smoke", action="store_true", help="Run a tiny smoke subset.")
+    p.add_argument(
+        "--num-seeds",
+        type=int,
+        default=None,
+        help="Override config seeds with a contiguous range of this length.",
+    )
+    p.add_argument(
+        "--seed-start",
+        type=int,
+        default=0,
+        help="Starting seed used together with --num-seeds.",
+    )
     return p.parse_args()
 
 
@@ -39,6 +51,10 @@ def main() -> None:
         cfg.dataset.censoring_targets = cfg.dataset.censoring_targets[:1]
         cfg.train.batch_sizes = cfg.train.batch_sizes[:2]
         cfg.train.seeds = cfg.train.seeds[:2]
+    if args.num_seeds is not None:
+        if args.num_seeds <= 0:
+            raise ValueError("--num-seeds must be >= 1")
+        cfg.train.seeds = list(range(args.seed_start, args.seed_start + args.num_seeds))
 
     run_rows: list[dict[str, float | int | str]] = []
     for event_target in cfg.dataset.event_prevalence_targets:
@@ -108,8 +124,10 @@ def main() -> None:
                         run_rows.append(summary)
                         print(json.dumps({"status": "completed_run", "run_name": run_name}))
 
+    run_df = pd.DataFrame(run_rows)
     write_csv(aggregates_root / "run_summaries.csv", run_rows)
-    pd.DataFrame(run_rows).to_json(aggregates_root / "run_summaries.json", orient="records", indent=2)
+    run_df.to_json(aggregates_root / "run_summaries.json", orient="records", indent=2)
+    _write_seed_aggregates(run_df, aggregates_root / "seed_aggregates.csv")
 
 
 def load_merged_config(base_config: str, grid_config: str) -> ExperimentConfig:
@@ -129,6 +147,31 @@ def deep_merge(left: dict, right: dict) -> dict:
         else:
             out[k] = v
     return out
+
+
+def _write_seed_aggregates(df: pd.DataFrame, output_path: Path) -> None:
+    if df.empty:
+        return
+    group_cols = ["event_target", "censor_target", "batch_size", "batching_policy"]
+    metric_col = "best_val_c_index"
+
+    grouped = (
+        df.groupby(group_cols)[metric_col]
+        .agg(["count", "mean", "std"])
+        .reset_index()
+        .rename(
+            columns={
+                "count": "n_runs",
+                "mean": "best_val_c_index_mean",
+                "std": "best_val_c_index_std",
+            }
+        )
+    )
+    grouped["best_val_c_index_sem"] = grouped["best_val_c_index_std"] / np.sqrt(grouped["n_runs"])
+    grouped["best_val_c_index_ci95"] = 1.96 * grouped["best_val_c_index_sem"]
+    grouped["best_val_c_index_ci95_lo"] = grouped["best_val_c_index_mean"] - grouped["best_val_c_index_ci95"]
+    grouped["best_val_c_index_ci95_hi"] = grouped["best_val_c_index_mean"] + grouped["best_val_c_index_ci95"]
+    grouped.to_csv(output_path, index=False)
 
 
 if __name__ == "__main__":
