@@ -38,6 +38,7 @@ model:
 python scripts/summarize_results.py --results-dir results
 python scripts/make_figures.py --results-dir results
 python scripts/write_interpretation.py --results-dir results
+python scripts/family_summary.py --results-dir results
 ```
 
 Manuscript-standard reporting in this repo uses:
@@ -47,8 +48,14 @@ Manuscript-standard reporting in this repo uses:
 
 Batching policy names:
 - `random`: unconstrained random mini-batches (baseline)
-- `event_quota_wor_<pct>`: enforce event quota without replacement (e.g. `event_quota_wor_25`, `event_quota_wor_50`, `event_quota_wor_75`)
-- `event_quota_wr_<pct>`: enforce event quota with replacement (e.g. `event_quota_wr_25`, `event_quota_wr_50`, `event_quota_wr_75`)
+- `event_quota_wor_<pct>`: event-enriched mini-batches without replacement (e.g. `event_quota_wor_25`, `event_quota_wor_50`, `event_quota_wor_75`)
+- `event_quota_wr_<pct>`: event-enriched mini-batches with replacement (e.g. `event_quota_wr_25`, `event_quota_wr_50`, `event_quota_wr_75`)
+- `riskset_anchor_<pct>`: risk-set-aware event-anchor mini-batches whose filler samples come from anchor risk sets (e.g. `riskset_anchor_25`, `riskset_anchor_50`, `riskset_anchor_75`)
+
+Interpretation shorthand:
+- `random`: no event constraint
+- `event_quota_*`: event-count enrichment only
+- `riskset_anchor_*`: event anchors plus time-aware control sampling
 
 ## Outputs
 
@@ -60,8 +67,10 @@ Batching policy names:
   - `table_theory.csv` (empirical-theory batch informativeness checks)
   - `table_feasibility_test_uno.csv` (strict-feasibility breakout)
   - `table_high_value_targets.csv` (high-value manuscript signals)
+  - `table_family_summary.csv` (single-file family-level collapse of `random`, `event_quota`, and `riskset_anchor`)
 - `results/figures/`: test-metric heatmaps, gain maps, training curves, event-count histograms, gradient-variance trends, forest deltas, paired seed slopes, validation-test gap, mechanism scatter, and improvement heatmaps
 - `results/interpretation.md`: auto-generated theory-facing interpretation
+- `results/family_report.md`: concise family-level markdown summary aligned to `table_family_summary.csv`
 
 ## Notes on Theory Checks
 

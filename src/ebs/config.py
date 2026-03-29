@@ -34,6 +34,9 @@ class TrainConfig:
             "event_quota_wr_25",
             "event_quota_wr_50",
             "event_quota_wr_75",
+            "riskset_anchor_25",
+            "riskset_anchor_50",
+            "riskset_anchor_75",
         ]
     )
     seeds: list[int] = field(default_factory=lambda: list(range(10)))

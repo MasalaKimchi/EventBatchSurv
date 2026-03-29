@@ -284,3 +284,157 @@ class EventQuotaBatchSampler(Sampler[list[int]]):
 
     def __len__(self) -> int:
         return len(self._batch_sizes())
+
+
+class RiskSetAnchorBatchSampler(Sampler[list[int]]):
+    """Event-anchor batches whose filler samples come from anchor risk sets."""
+
+    def __init__(
+        self,
+        *,
+        indices: np.ndarray,
+        events: np.ndarray,
+        times: np.ndarray,
+        batch_size: int,
+        event_fraction: float,
+        seed: int,
+        drop_last: bool = False,
+        strict_feasible: bool = True,
+    ):
+        self.indices = np.asarray(indices, dtype=np.int64)
+        self.events = np.asarray(events, dtype=np.int64)
+        self.times = np.asarray(times, dtype=np.float64)
+        self.batch_size = int(batch_size)
+        self.event_fraction = float(event_fraction)
+        self.seed = int(seed)
+        self.drop_last = bool(drop_last)
+        self.strict_feasible = bool(strict_feasible)
+        self.with_replacement = True
+        self.epoch = 0
+        if self.batch_size <= 0:
+            raise ValueError("batch_size must be > 0")
+        if self.event_fraction < 0.0 or self.event_fraction > 1.0:
+            raise ValueError("event_fraction must be in [0, 1]")
+        if self.indices.ndim != 1:
+            raise ValueError("indices must be a 1D array")
+        if self.events.ndim != 1:
+            raise ValueError("events must be a 1D array")
+        if self.times.ndim != 1:
+            raise ValueError("times must be a 1D array")
+        if len(self.indices) == 0:
+            raise ValueError("indices must be non-empty")
+        if np.any(self.indices < 0) or np.any(self.indices >= len(self.events)) or np.any(self.indices >= len(self.times)):
+            raise ValueError("indices contain out-of-range values for events/times arrays")
+        selected_events = self.events[self.indices]
+        if np.any((selected_events != 0) & (selected_events != 1)):
+            raise ValueError("events must be binary (0/1) for all selected indices")
+        self._event_pool = self.indices[self.events[self.indices] == 1].copy()
+        sorted_order = np.argsort(self.times[self.indices], kind="mergesort")
+        self._sorted_indices = self.indices[sorted_order]
+        self._sorted_times = self.times[self._sorted_indices]
+        self._feasible = self._check_feasible()
+
+    @property
+    def feasible(self) -> bool:
+        return self._feasible
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
+    def _batch_sizes(self) -> list[int]:
+        total = len(self.indices)
+        if self.drop_last:
+            n_full = total // self.batch_size
+            return [self.batch_size] * n_full
+        n_full = total // self.batch_size
+        rem = total % self.batch_size
+        out = [self.batch_size] * n_full
+        if rem > 0:
+            out.append(rem)
+        return out
+
+    def _check_feasible(self) -> bool:
+        batch_sizes = self._batch_sizes()
+        if not batch_sizes:
+            return True
+        max_required = max(int(math.ceil(self.event_fraction * bs)) for bs in batch_sizes)
+        return max_required == 0 or len(self._event_pool) >= max_required
+
+    def _riskset_candidates(self, anchor_idx: int, excluded: np.ndarray) -> np.ndarray:
+        anchor_time = self.times[anchor_idx]
+        start = int(np.searchsorted(self._sorted_times, anchor_time, side="left"))
+        candidates = self._sorted_indices[start:]
+        if candidates.size == 0:
+            return candidates
+        if excluded.size > 0:
+            candidates = candidates[~np.isin(candidates, excluded)]
+        return candidates
+
+    def _union_riskset_candidates(self, anchors: np.ndarray, excluded: np.ndarray) -> np.ndarray:
+        pools: list[np.ndarray] = []
+        for anchor_idx in anchors.tolist():
+            pool = self._riskset_candidates(int(anchor_idx), excluded)
+            if pool.size > 0:
+                pools.append(pool)
+        if not pools:
+            return np.empty(0, dtype=np.int64)
+        return np.unique(np.concatenate(pools))
+
+    def __iter__(self) -> Iterator[list[int]]:
+        rng = np.random.default_rng(self.seed + self.epoch)
+        if self.strict_feasible and not self._feasible:
+            perm = rng.permutation(self.indices)
+            for start in range(0, len(perm), self.batch_size):
+                batch = perm[start : start + self.batch_size]
+                if len(batch) < self.batch_size and self.drop_last:
+                    continue
+                yield batch.tolist()
+            return
+
+        all_pool = self.indices.copy()
+        for bs in self._batch_sizes():
+            required = int(math.ceil(self.event_fraction * bs))
+            batch: list[int] = []
+            anchors = np.empty(0, dtype=np.int64)
+            if required > 0 and len(self._event_pool) > 0:
+                anchor_count = min(required, len(self._event_pool))
+                anchors = rng.choice(self._event_pool, size=anchor_count, replace=False)
+                batch.extend(int(i) for i in anchors.tolist())
+
+            while len(batch) < bs and anchors.size > 0:
+                excluded = np.array(batch, dtype=np.int64)
+                progress = False
+                for anchor_idx in rng.permutation(anchors):
+                    candidates = self._riskset_candidates(int(anchor_idx), excluded)
+                    if candidates.size == 0:
+                        continue
+                    chosen = int(rng.choice(candidates))
+                    batch.append(chosen)
+                    progress = True
+                    if len(batch) >= bs:
+                        break
+                    excluded = np.array(batch, dtype=np.int64)
+                if not progress:
+                    break
+
+            if len(batch) < bs and anchors.size > 0:
+                excluded = np.array(batch, dtype=np.int64)
+                union_pool = self._union_riskset_candidates(anchors, excluded)
+                if union_pool.size > 0:
+                    need = min(bs - len(batch), int(union_pool.size))
+                    chosen = rng.choice(union_pool, size=need, replace=False)
+                    batch.extend(int(i) for i in np.atleast_1d(chosen).tolist())
+
+            if len(batch) < bs:
+                excluded = np.array(batch, dtype=np.int64)
+                remaining_pool = all_pool if excluded.size == 0 else all_pool[~np.isin(all_pool, excluded)]
+                if remaining_pool.size > 0:
+                    need = min(bs - len(batch), int(remaining_pool.size))
+                    chosen = rng.choice(remaining_pool, size=need, replace=False)
+                    batch.extend(int(i) for i in np.atleast_1d(chosen).tolist())
+
+            rng.shuffle(batch)
+            yield batch
+
+    def __len__(self) -> int:
+        return len(self._batch_sizes())

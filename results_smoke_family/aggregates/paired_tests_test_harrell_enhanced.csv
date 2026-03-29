@@ -1,0 +1,11 @@
+event_target,censor_target,batch_size,left_policy,right_policy,n_pairs,mean_delta,std_delta,sem_delta,ci95_delta,ci95_delta_lo,ci95_delta_hi,cohen_dz,ttest_stat,ttest_pvalue,wilcoxon_stat,wilcoxon_pvalue,ttest_qvalue_bh,wilcoxon_qvalue_bh,significant_p05,significant_q05,significant_wilcoxon_q05,practical_delta_threshold,practically_significant
+0.1,0.5,8,event_quota_wr_25,event_quota_wr_50,1,-0.021276593208312933,,,,,,,,,0.0,1.0,,1.0,False,False,False,0.01,True
+0.1,0.5,8,event_quota_wr_25,random,1,-0.1595744788646698,,,,,,,,,0.0,1.0,,1.0,False,False,False,0.01,True
+0.1,0.5,8,event_quota_wr_25,riskset_anchor_25,1,-0.0709219872951507,,,,,,,,,0.0,1.0,,1.0,False,False,False,0.01,True
+0.1,0.5,8,event_quota_wr_25,riskset_anchor_50,1,0.04255318641662598,,,,,,,,,0.0,1.0,,1.0,False,False,False,0.01,True
+0.1,0.5,8,event_quota_wr_50,random,1,-0.13829788565635687,,,,,,,,,0.0,1.0,,1.0,False,False,False,0.01,True
+0.1,0.5,8,event_quota_wr_50,riskset_anchor_25,1,-0.04964539408683777,,,,,,,,,0.0,1.0,,1.0,False,False,False,0.01,True
+0.1,0.5,8,event_quota_wr_50,riskset_anchor_50,1,0.06382977962493891,,,,,,,,,0.0,1.0,,1.0,False,False,False,0.01,True
+0.1,0.5,8,random,riskset_anchor_25,1,0.0886524915695191,,,,,,,,,0.0,1.0,,1.0,False,False,False,0.01,True
+0.1,0.5,8,random,riskset_anchor_50,1,0.20212766528129578,,,,,,,,,0.0,1.0,,1.0,False,False,False,0.01,True
+0.1,0.5,8,riskset_anchor_25,riskset_anchor_50,1,0.11347517371177668,,,,,,,,,0.0,1.0,,1.0,False,False,False,0.01,True

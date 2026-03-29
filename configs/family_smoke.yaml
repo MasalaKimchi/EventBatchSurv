@@ -1,0 +1,15 @@
+name: small_batch_cox_family_smoke
+
+dataset:
+  n_samples: 512
+  event_prevalence_targets: [0.10]
+  censoring_targets: [0.50]
+
+train:
+  batch_sizes: [8]
+  batching_policies: [random, event_quota_wr_25, event_quota_wr_50, riskset_anchor_25, riskset_anchor_50]
+  seeds: [0]
+  epochs: 1
+
+output:
+  results_dir: results_smoke_family

@@ -1,0 +1,9 @@
+target,value,note
+event_quota_wr_25_gain_when_bp_lt_1_test_uno,-0.15555536746978765,Primary low-information regime signal; positive is desirable.
+event_quota_wr_25_gain_when_bp_ge_1_test_uno,,Tradeoff regime check; near-zero or negative can indicate diminishing returns.
+uno_minus_harrell_mean_gap_high_censoring,0.05164005756378174,Reliability divergence under heavy censoring (Uno expected more stable).
+mean_abs_val_minus_test_uno_gap,0.04864459037780762,Generalization gap diagnostic.
+event_quota_wr_25_feasible_rate,1.0,Feasibility rate for this policy under current event prevalence and batch-size settings.
+event_quota_wr_50_feasible_rate,1.0,Feasibility rate for this policy under current event prevalence and batch-size settings.
+riskset_anchor_25_feasible_rate,1.0,Feasibility rate for this policy under current event prevalence and batch-size settings.
+riskset_anchor_50_feasible_rate,1.0,Feasibility rate for this policy under current event prevalence and batch-size settings.

@@ -15,7 +15,7 @@ from ebs.io import append_jsonl, ensure_dir, write_json
 from ebs.metrics import brier_at_median_time, cox_partial_log_likelihood_loss, harrell_c_index, ipcw_c_index
 from ebs.model import CoxMLP, CoxResNet18
 from ebs.policies import normalize_batching_policy, parse_batching_policy
-from ebs.samplers import EventQuotaBatchSampler, RandomBatchSampler
+from ebs.samplers import EventQuotaBatchSampler, RandomBatchSampler, RiskSetAnchorBatchSampler
 
 
 @dataclass
@@ -54,6 +54,7 @@ def run_training(
         policy=normalized_policy,
         indices=train_local_idx,
         events=np.array(train_events, dtype=np.int64),
+        times=np.array(time_obs[train_idx], dtype=np.float64),
         batch_size=context.batch_size,
         seed=context.seed,
     )
@@ -281,6 +282,7 @@ def _build_train_sampler(
     policy: str,
     indices: np.ndarray,
     events: np.ndarray,
+    times: np.ndarray,
     batch_size: int,
     seed: int,
 ) -> torch.utils.data.Sampler[list[int]]:
@@ -295,6 +297,16 @@ def _build_train_sampler(
             event_fraction=spec.event_fraction,
             seed=seed,
             with_replacement=spec.with_replacement,
+            strict_feasible=spec.strict_feasible,
+        )
+    if spec.mode == "riskset_anchor":
+        return RiskSetAnchorBatchSampler(
+            indices=indices,
+            events=events,
+            times=times,
+            batch_size=batch_size,
+            event_fraction=spec.event_fraction,
+            seed=seed,
             strict_feasible=spec.strict_feasible,
         )
     raise ValueError(f"Unknown batching policy: {policy}")

@@ -1,0 +1,11 @@
+event_target,censor_target,batch_size,left_policy,right_policy,n_pairs,mean_delta,std_delta,ttest_stat,ttest_pvalue
+0.1,0.5,8,event_quota_wr_25,event_quota_wr_50,1,-0.014651954174041804,0.0,,
+0.1,0.5,8,event_quota_wr_25,random,1,-0.15555536746978765,0.0,,
+0.1,0.5,8,event_quota_wr_25,riskset_anchor_25,1,-0.08051842451095587,0.0,,
+0.1,0.5,8,event_quota_wr_25,riskset_anchor_50,1,0.07081440091133118,0.0,,
+0.1,0.5,8,event_quota_wr_50,random,1,-0.14090341329574585,0.0,,
+0.1,0.5,8,event_quota_wr_50,riskset_anchor_25,1,-0.06586647033691406,0.0,,
+0.1,0.5,8,event_quota_wr_50,riskset_anchor_50,1,0.08546635508537298,0.0,,
+0.1,0.5,8,random,riskset_anchor_25,1,0.07503694295883179,0.0,,
+0.1,0.5,8,random,riskset_anchor_50,1,0.22636976838111883,0.0,,
+0.1,0.5,8,riskset_anchor_25,riskset_anchor_50,1,0.15133282542228704,0.0,,
