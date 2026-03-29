@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import pandas as pd
@@ -12,7 +11,7 @@ import sys
 
 sys.path.insert(0, str(ROOT / "src"))
 
-from ebs.analysis import summarize_with_significance
+from ebs.analysis import summarize_with_paired_effects
 from ebs.io import ensure_dir
 from ebs.policies import normalize_batching_policy
 
@@ -33,33 +32,12 @@ def main() -> None:
     if run_summaries.empty:
         raise RuntimeError("No run summaries found. Run scripts/run_grid.py first.")
 
-    merged = _attach_empirical_columns(run_summaries=run_summaries, results_dir=results_dir)
+    merged = _require_embedded_columns(run_summaries)
     merged = _ensure_test_metric_columns(merged)
     merged["bp"] = merged["batch_size"] * merged["train_event_rate"]
     merged.to_csv(agg_dir / "run_summaries_enriched.csv", index=False)
 
-    # Backward-compatible validation-centric files.
-    summary, tests = summarize_with_significance(merged, metric="best_val_c_index")
-    summary.to_csv(agg_dir / "condition_summary.csv", index=False)
-    tests.to_csv(agg_dir / "paired_tests.csv", index=False)
-
-    # Primary inference on held-out test metric.
-    harrell_summary, harrell_tests = summarize_with_significance(merged, metric="test_harrell_c_index")
-    harrell_summary.to_csv(agg_dir / "condition_summary_test_harrell.csv", index=False)
-    harrell_tests.to_csv(agg_dir / "paired_tests_test_harrell.csv", index=False)
-
-    test_summary, test_tests = summarize_with_significance(merged, metric="test_uno_c_index")
-    test_summary.to_csv(agg_dir / "condition_summary_test_uno.csv", index=False)
-    test_tests.to_csv(agg_dir / "paired_tests_test_uno.csv", index=False)
-
-    # Robustness on calibration proxy.
-    brier_summary, brier_tests = summarize_with_significance(merged, metric="test_brier_proxy")
-    brier_summary.to_csv(agg_dir / "condition_summary_test_brier.csv", index=False)
-    brier_tests.to_csv(agg_dir / "paired_tests_test_brier.csv", index=False)
-
-    # Enhanced paired tests with effect size, CI, and multiple-testing correction.
     _write_enhanced_tests(merged, agg_dir)
-
     _write_main_table(merged, table_dir / "table_main.csv")
     _write_theory_table(merged, table_dir / "table_theory.csv")
     _write_feasibility_tables(merged, table_dir)
@@ -77,8 +55,8 @@ def _load_run_summaries(results_dir: Path) -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def _attach_empirical_columns(run_summaries: pd.DataFrame, results_dir: Path) -> pd.DataFrame:
-    concise_cols = {
+def _require_embedded_columns(run_summaries: pd.DataFrame) -> pd.DataFrame:
+    required = {
         "empirical_zero_event_prob",
         "empirical_weak_info_prob",
         "theoretical_zero_event_prob",
@@ -86,33 +64,14 @@ def _attach_empirical_columns(run_summaries: pd.DataFrame, results_dir: Path) ->
         "train_event_rate",
         "sampler_feasible",
     }
-    if concise_cols.issubset(set(run_summaries.columns)):
-        return run_summaries.copy()
-
-    # Backward-compatibility fallback for legacy runs.
-    runs_dir = results_dir / "runs"
-    empirical_rows = []
-    for run_dir in sorted(runs_dir.glob("*")):
-        batch_log = run_dir / "batch_logs.jsonl"
-        meta_file = run_dir / "run_meta.json"
-        if not batch_log.exists() or not meta_file.exists():
-            continue
-        bdf = pd.read_json(batch_log, lines=True)
-        with meta_file.open("r", encoding="utf-8") as f:
-            meta = json.load(f)
-        empirical_rows.append(
-            {
-                "run_name": run_dir.name,
-                "empirical_zero_event_prob": float((bdf["event_count"] == 0).mean()),
-                "empirical_weak_info_prob": float((bdf["event_count"] <= 1).mean()),
-                "theoretical_zero_event_prob": float(meta["theoretical_zero_event_prob"]),
-                "theoretical_weak_info_prob": float(meta["theoretical_weak_info_prob"]),
-                "train_event_rate": float(meta["train_event_rate"]),
-                "sampler_feasible": bool(meta.get("sampler_feasible", True)),
-            }
+    missing = sorted(required.difference(set(run_summaries.columns)))
+    if missing:
+        raise RuntimeError(
+            "Run summaries are missing embedded diagnostics: "
+            + ", ".join(missing)
+            + ". Re-run experiments with the current training engine."
         )
-    empirical_df = pd.DataFrame(empirical_rows)
-    return run_summaries.merge(empirical_df, on="run_name", how="left")
+    return run_summaries.copy()
 
 
 def _ensure_test_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -182,8 +141,6 @@ def _write_theory_table(df: pd.DataFrame, out_file: Path) -> None:
 
 
 def _write_enhanced_tests(df: pd.DataFrame, agg_dir: Path) -> None:
-    from ebs.analysis import summarize_with_paired_effects
-
     harrell_summary, harrell_tests = summarize_with_paired_effects(
         df,
         metric="test_harrell_c_index",
@@ -302,8 +259,9 @@ def _feasible_rate(df: pd.DataFrame, *, policy: str) -> float:
 
 def _primary_policy(df: pd.DataFrame) -> str | None:
     preferred = [
-        "event_quota_wor_25",
+        "riskset_anchor_25",
         "event_quota_wr_25",
+        "event_quota_wor_25",
     ]
     existing = set(df["batching_policy"].astype(str).unique())
     for p in preferred:

@@ -1,6 +1,0 @@
-event_target,censor_target,batch_size,batching_policy,n_runs,best_val_c_index_mean,best_val_c_index_std,best_val_c_index_sem,best_val_c_index_ci95,best_val_c_index_ci95_lo,best_val_c_index_ci95_hi
-0.1,0.5,8,event_quota_wr_25,1,0.44999998807907104,,,,,
-0.1,0.5,8,event_quota_wr_50,1,0.4906249940395355,,,,,
-0.1,0.5,8,random,1,0.528124988079071,,,,,
-0.1,0.5,8,riskset_anchor_25,1,0.5093749761581421,,,,,
-0.1,0.5,8,riskset_anchor_50,1,0.48124998807907104,,,,,

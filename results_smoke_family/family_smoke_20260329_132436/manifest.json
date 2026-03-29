@@ -1,7 +1,0 @@
-{
-  "run_id": "family_smoke_20260329_132436",
-  "created_at": "20260329_132436",
-  "grid_config": "configs/family_smoke.yaml",
-  "base_config": "configs/base.yaml",
-  "n_runs": 5
-}

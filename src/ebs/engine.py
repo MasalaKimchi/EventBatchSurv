@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Subset
 from ebs.config import ExperimentConfig
 from ebs.data import SurvivalTensorDataset
 from ebs.diagnostics import comparable_pairs_count, grad_norm, summarize_epoch_batch_diagnostics
-from ebs.io import append_jsonl, ensure_dir, write_json
+from ebs.io import append_jsonl, ensure_dir
 from ebs.metrics import brier_at_median_time, cox_partial_log_likelihood_loss, harrell_c_index, ipcw_c_index
 from ebs.model import CoxMLP, CoxResNet18
 from ebs.policies import normalize_batching_policy, parse_batching_policy
@@ -69,20 +69,16 @@ def run_training(
     scheduler = _build_scheduler(cfg=cfg, optimizer=optimizer)
 
     write_any_artifacts = (
-        cfg.train.save_epoch_logs or cfg.train.save_batch_logs or cfg.train.save_run_meta or cfg.train.save_run_summary
+        cfg.train.save_epoch_logs or cfg.train.save_batch_logs
     )
     run_dir = ensure_dir(context.output_dir) if write_any_artifacts else context.output_dir
     epoch_log_path = run_dir / "epoch_logs.jsonl"
     batch_log_path = run_dir / "batch_logs.jsonl"
-    run_meta_path = run_dir / "run_meta.json"
-    run_summary_path = run_dir / "run_summary.json"
 
     if not cfg.train.save_epoch_logs and epoch_log_path.exists():
         epoch_log_path.unlink()
     if not cfg.train.save_batch_logs and batch_log_path.exists():
         batch_log_path.unlink()
-    if not cfg.train.save_run_meta and run_meta_path.exists():
-        run_meta_path.unlink()
 
     best_val = -np.inf
     best_epoch = -1
@@ -181,8 +177,6 @@ def run_training(
         model.load_state_dict(best_state_dict)
         test_metrics = evaluate(model=model, loader=test_loader, device=device, backbone=backbone)
 
-    if cfg.train.save_run_meta:
-        write_json(run_meta_path, run_meta)
     empirical_zero = float(zero_event_batches / total_batches) if total_batches > 0 else float("nan")
     empirical_weak = float(weak_info_batches / total_batches) if total_batches > 0 else float("nan")
     result = {
@@ -218,8 +212,6 @@ def run_training(
         "requested_event_fraction": float(run_meta["requested_event_fraction"]),
         "requested_min_events_per_batch": int(run_meta["requested_min_events_per_batch"]),
     }
-    if cfg.train.save_run_summary:
-        write_json(run_summary_path, result)
     return result
 
 

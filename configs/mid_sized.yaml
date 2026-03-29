@@ -1,0 +1,15 @@
+name: small_batch_cox_mid_sized
+
+dataset:
+  n_samples: 2048
+  event_prevalence_targets: [0.05, 0.25]
+  censoring_targets: [0.25, 0.75]
+
+train:
+  batch_sizes: [8, 16]
+  batching_policies: [random, event_quota_wr_25, riskset_anchor_25]
+  seeds: [0, 1, 2]
+  epochs: 4
+
+output:
+  results_dir: results_mid_sized

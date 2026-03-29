@@ -14,9 +14,6 @@ class SyntheticSurvivalData:
     x: np.ndarray
     time: np.ndarray
     event: np.ndarray
-    digits: np.ndarray
-    realized_event_rate: float
-    realized_censoring_susceptible: float
 
 
 def load_mnist_arrays(mnist_root: str) -> tuple[np.ndarray, np.ndarray]:
@@ -75,20 +72,10 @@ def generate_synthetic_survival_from_mnist(
     observed_time = np.minimum(event_time, censor_time)
     observed_event = (event_time <= censor_time) & (susceptible == 1)
 
-    realized_event_rate = float(observed_event.mean())
-    susceptible_mask = susceptible == 1
-    if susceptible_mask.any():
-        realized_censoring_susceptible = float(1.0 - observed_event[susceptible_mask].mean())
-    else:
-        realized_censoring_susceptible = 1.0
-
     return SyntheticSurvivalData(
         x=x.astype(np.float32),
         time=observed_time.astype(np.float32),
         event=observed_event.astype(np.int64),
-        digits=digits.astype(np.int64),
-        realized_event_rate=realized_event_rate,
-        realized_censoring_susceptible=realized_censoring_susceptible,
     )
 
 

@@ -48,11 +48,8 @@ class TrainConfig:
     min_lr: float = 1e-5
     grad_clip_norm: float = 10.0
     device: str = "cpu"
-    log_every_batches: int = 50
     save_batch_logs: bool = False
     save_epoch_logs: bool = False
-    save_run_meta: bool = False
-    save_run_summary: bool = True
 
 
 @dataclass
@@ -67,9 +64,6 @@ class OutputConfig:
     results_dir: str = "results"
     run_dirname: str = "runs"
     aggregate_dirname: str = "aggregates"
-    figure_dirname: str = "figures"
-    table_dirname: str = "tables"
-    interpretation_filename: str = "interpretation.md"
 
 
 @dataclass

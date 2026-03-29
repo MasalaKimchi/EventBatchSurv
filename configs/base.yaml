@@ -23,7 +23,6 @@ train:
   min_lr: 0.00001
   grad_clip_norm: 10.0
   device: cpu
-  log_every_batches: 50
 
 model:
   backbone: cox_mlp
@@ -34,6 +33,3 @@ output:
   results_dir: results
   run_dirname: runs
   aggregate_dirname: aggregates
-  figure_dirname: figures
-  table_dirname: tables
-  interpretation_filename: interpretation.md

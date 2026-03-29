@@ -1,0 +1,15 @@
+name: small_batch_cox_followup_targeted
+
+dataset:
+  n_samples: 4096
+  event_prevalence_targets: [0.05, 0.25]
+  censoring_targets: [0.75]
+
+train:
+  batch_sizes: [8, 16]
+  batching_policies: [random, event_quota_wr_25, riskset_anchor_25]
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7]
+  epochs: 12
+
+output:
+  results_dir: results_followup_targeted

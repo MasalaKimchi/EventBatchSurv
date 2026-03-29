@@ -1,6 +1,0 @@
-event_target,censor_target,batch_size,batching_policy,test_brier_proxy_mean,test_brier_proxy_std,n_seeds
-0.1,0.5,8,event_quota_wr_25,0.393215924501419,,1
-0.1,0.5,8,event_quota_wr_50,0.3926496803760528,,1
-0.1,0.5,8,random,0.4830794036388397,,1
-0.1,0.5,8,riskset_anchor_25,0.4103721380233764,,1
-0.1,0.5,8,riskset_anchor_50,0.387710839509964,,1

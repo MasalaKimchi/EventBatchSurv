@@ -1,6 +1,0 @@
-event_target,censor_target,batch_size,batching_policy,test_harrell_c_index_mean,test_harrell_c_index_std,n_seeds
-0.1,0.5,8,event_quota_wr_25,0.3758865296840668,,1
-0.1,0.5,8,event_quota_wr_50,0.3971631228923797,,1
-0.1,0.5,8,random,0.5354610085487366,,1
-0.1,0.5,8,riskset_anchor_25,0.4468085169792175,,1
-0.1,0.5,8,riskset_anchor_50,0.3333333432674408,,1

@@ -51,9 +51,6 @@ def main() -> None:
     runs_root = ensure_dir(Path(cfg.output.results_dir) / cfg.output.run_dirname)
     aggregates_root = ensure_dir(Path(cfg.output.results_dir) / cfg.output.aggregate_dirname)
 
-    # Compact run layout: we only keep consolidated summaries in one timestamped folder.
-    cfg.train.save_run_summary = False
-
     if args.smoke:
         cfg.dataset.event_prevalence_targets = cfg.dataset.event_prevalence_targets[:1]
         cfg.dataset.censoring_targets = cfg.dataset.censoring_targets[:1]
@@ -89,20 +86,6 @@ def main() -> None:
                     cache_file=split_file,
                 )
 
-                dataset_meta = {
-                    "event_target": event_target,
-                    "censor_target": censor_target,
-                    "seed": seed,
-                    "realized_event_rate": surv.realized_event_rate,
-                    "realized_censoring_susceptible": surv.realized_censoring_susceptible,
-                }
-                dataset_meta_file = (
-                    Path(cfg.dataset.cache_dir)
-                    / "datasets"
-                    / f"evt_{event_target:.2f}_cen_{censor_target:.2f}_seed_{seed}.json"
-                )
-                write_json(dataset_meta_file, dataset_meta)
-
                 for batch_size in cfg.train.batch_sizes:
                     for raw_policy in cfg.train.batching_policies:
                         policy = normalize_batching_policy(raw_policy)
@@ -129,32 +112,19 @@ def main() -> None:
                             test_idx=split.test_idx,
                         )
                         summary["run_name"] = run_name
-                        summary["compact_run_id"] = f"{run_prefix}_{timestamp}"
-                        summary["realized_dataset_event_rate"] = surv.realized_event_rate
-                        summary["realized_censoring_susceptible"] = surv.realized_censoring_susceptible
                         run_rows.append(summary)
                         print(json.dumps({"status": "completed_run", "run_name": run_name}))
 
     run_df = pd.DataFrame(run_rows)
-    # Write concise, one-file-per-format summaries for this run only.
-    write_csv(compact_run_dir / "run_summaries.csv", run_rows)
-    run_df.to_json(compact_run_dir / "run_summaries.json", orient="records", indent=2)
-    _write_seed_aggregates(run_df, compact_run_dir / "seed_aggregates.csv")
-    write_json(
-        compact_run_dir / "manifest.json",
-        {
-            "run_id": f"{run_prefix}_{timestamp}",
-            "created_at": timestamp,
-            "grid_config": args.grid_config,
-            "base_config": args.base_config,
-            "n_runs": int(len(run_rows)),
-        },
-    )
-
-    # Keep legacy aggregate outputs for downstream scripts.
-    write_csv(aggregates_root / "run_summaries.csv", run_rows)
-    run_df.to_json(aggregates_root / "run_summaries.json", orient="records", indent=2)
-    _write_seed_aggregates(run_df, aggregates_root / "seed_aggregates.csv")
+    manifest = {
+        "run_id": f"{run_prefix}_{timestamp}",
+        "created_at": timestamp,
+        "grid_config": args.grid_config,
+        "base_config": args.base_config,
+        "n_runs": int(len(run_rows)),
+    }
+    _write_run_artifacts(run_rows=run_rows, run_df=run_df, output_dir=compact_run_dir, manifest=manifest)
+    _write_run_artifacts(run_rows=run_rows, run_df=run_df, output_dir=aggregates_root)
 
 
 def load_merged_config(base_config: str, grid_config: str) -> ExperimentConfig:
@@ -199,6 +169,20 @@ def _write_seed_aggregates(df: pd.DataFrame, output_path: Path) -> None:
     grouped["best_val_c_index_ci95_lo"] = grouped["best_val_c_index_mean"] - grouped["best_val_c_index_ci95"]
     grouped["best_val_c_index_ci95_hi"] = grouped["best_val_c_index_mean"] + grouped["best_val_c_index_ci95"]
     grouped.to_csv(output_path, index=False)
+
+
+def _write_run_artifacts(
+    *,
+    run_rows: list[dict[str, float | int | str]],
+    run_df: pd.DataFrame,
+    output_dir: Path,
+    manifest: dict[str, object] | None = None,
+) -> None:
+    write_csv(output_dir / "run_summaries.csv", run_rows)
+    run_df.to_json(output_dir / "run_summaries.json", orient="records", indent=2)
+    _write_seed_aggregates(run_df, output_dir / "seed_aggregates.csv")
+    if manifest is not None:
+        write_json(output_dir / "manifest.json", manifest)
 
 
 if __name__ == "__main__":
